@@ -1,0 +1,1096 @@
+{
+  "info": {
+    "_postman_id": "f1a5c0de-0001-4a00-8000-000000000001",
+    "name": "Fayrly v1 API",
+    "description": "Collection end-to-end untuk backend Fayrly v1 lewat gateway :8080.\n\nUrutan folder: Auth → Users → Roles → Events → Reports → Cleanup → Health. Jalankan lewat Collection Runner agar token dan ID terisi otomatis.\n\nPrasyarat: stack lokal menyala (docker compose up -d) dan environment \"Fayrly Local\" dipilih.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"register 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"member_token\", b.access_token);",
+                  "pm.collectionVariables.set(\"member_id\", b.user.id);",
+                  "pm.collectionVariables.set(\"access_token\", b.access_token);",
+                  "pm.collectionVariables.set(\"refresh_token\", b.refresh_token);",
+                  "pm.test(\"session berisi token\", function () {",
+                  "  pm.expect(b.access_token).to.be.a(\"string\").and.not.empty;",
+                  "  pm.expect(b.user.roles).to.include(\"member\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"member-{{$timestamp}}@fayrly.local\", \"password\": \"Member123!\", \"name\": \"Member Postman\", \"phone\": \"+6281212345678\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/register",
+            "description": "Publik. Membuat akun member dengan email unik per run. Token member disimpan ke member_token."
+          }
+        },
+        {
+          "name": "Login Superadmin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"login 200\", function () { pm.response.to.have.status(200); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"access_token\", b.access_token);",
+                  "pm.collectionVariables.set(\"refresh_token\", b.refresh_token);",
+                  "pm.test(\"superadmin punya semua permission\", function () {",
+                  "  pm.expect(b.access_token).to.be.a(\"string\").and.not.empty;",
+                  "  pm.expect(b.user.roles).to.include(\"superadmin\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{admin_email}}\", \"password\": \"{{admin_password}}\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Publik. Login bootstrap superadmin dari environment."
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"refresh 200\", function () { pm.response.to.have.status(200); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"access_token\", b.access_token);",
+                  "pm.collectionVariables.set(\"refresh_token\", b.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refresh_token\": \"{{refresh_token}}\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/refresh",
+            "description": "Rotasi refresh token. Token lama langsung tidak berlaku (reuse detection)."
+          }
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/auth/me",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Profil + roles + permissions dari token aktif."
+          }
+        },
+        {
+          "name": "Change Member Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"password 200/204\", function () {",
+                  "  pm.expect([200, 204]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"current_password\": \"Member123!\", \"new_password\": \"Member456!\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/password",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{member_token}}", "type": "string" }
+              ]
+            },
+            "description": "Menggunakan token member hasil Register, jadi password admin tidak berubah."
+          }
+        },
+        {
+          "name": "Firebase Login (butuh konfigurasi)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"id_token\": \"<firebase_id_token>\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/firebase",
+            "description": "Mengembalikan 503 selama FIREBASE_PROJECT_ID belum diisi. Isi id_token asli untuk menguji login Firebase."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users?page=1&page_size=20&status=active",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Filter opsional: q, status (active/inactive/suspended), role (key), page, page_size."
+          }
+        },
+        {
+          "name": "Create User (manager)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create user 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"user_id\", b.data.id);",
+                  "pm.test(\"user punya role manager\", function () { pm.expect(b.data.roles).to.include(\"manager\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"manager-{{$timestamp}}@fayrly.local\", \"name\": \"Event Manager\", \"phone\": \"+6281299998888\", \"roles\": [\"manager\"], \"password\": \"Manager123!\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/users",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Butuh user:write. Hapus field password untuk mendapatkan temporary_password dari server."
+          }
+        },
+        {
+          "name": "Get User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users/{{user_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\": \"Event Manager Updated\", \"phone\": \"+6281277776666\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/users/{{user_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Field opsional: name, phone, avatar_url, status."
+          }
+        },
+        {
+          "name": "Assign Roles",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"roles\": [\"manager\", \"staff\"]}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/users/{{user_id}}/roles",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Mengganti seluruh role user. Array kosong mencabut semua role."
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users/{{user_id}}/reset-password",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Tanpa body. Response berisi temporary_password."
+          }
+        },
+        {
+          "name": "Create Reviewer (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create reviewer 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"reviewer_id\", b.data.id);",
+                  "pm.collectionVariables.set(\"reviewer_email\", b.data.email);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"reviewer-{{$timestamp}}@fayrly.local\", \"name\": \"Report Reviewer\", \"roles\": [\"admin\"], \"password\": \"Reviewer123!\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/users",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Dipakai untuk menguji review report (tidak boleh review report sendiri)."
+          }
+        },
+        {
+          "name": "Login Reviewer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"reviewer login 200\", function () { pm.response.to.have.status(200); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"reviewer_token\", b.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{reviewer_email}}\", \"password\": \"Reviewer123!\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/auth/login",
+            "description": "Token reviewer disimpan terpisah agar tidak menimpa token superadmin."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Roles & Permissions",
+      "item": [
+        {
+          "name": "List Roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/roles",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Role (finance)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create role 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"role_id\", b.data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"key\": \"finance-{{$timestamp}}\", \"name\": \"Finance\", \"description\": \"Reviews financial reports\", \"permissions\": [\"report:read\", \"report:approve\"]}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/roles",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Role",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/roles/{{role_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\": \"Finance Team\", \"description\": \"Finance and report review\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/roles/{{role_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set Role Permissions",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"permissions\": [\"report:read\", \"report:write\", \"report:approve\"]}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/roles/{{role_id}}/permissions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Mengganti seluruh permission role ini."
+          }
+        },
+        {
+          "name": "List Permissions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/permissions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Access Matrix",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/access-matrix",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Access Matrix",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"roles\": [{\"role_id\": \"{{role_id}}\", \"permissions\": [\"report:read\", \"report:approve\"]}]}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/access-matrix",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Mengganti permission role yang dikirim. Role lain tidak tersentuh."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "List Events (publik)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/events?page=1&page_size=20",
+            "description": "Tanpa token hanya menampilkan status published/ongoing/completed. Filter: q, type, city, status, from, to, page, page_size."
+          }
+        },
+        {
+          "name": "List My Events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/events/mine?page=1&page_size=20",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Event (charity)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create event 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"event_id\", b.data.id);",
+                  "pm.test(\"event draft dengan tags\", function () {",
+                  "  pm.expect(b.data.status).to.eql(\"draft\");",
+                  "  pm.expect(b.data.tags).to.include(\"charity\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Fayrly Charity Night {{$timestamp}}\", \"description\": \"Konser amal tahunan\", \"type\": \"charity\", \"venue_name\": \"Grand Hall\", \"venue_address\": \"Jl. Sudirman 1\", \"city\": \"Jakarta\", \"country\": \"ID\", \"starts_at\": \"2027-06-01T19:00:00+07:00\", \"ends_at\": \"2027-06-01T22:00:00+07:00\", \"capacity\": 500, \"price_min\": 100000, \"price_max\": 500000, \"currency\": \"IDR\", \"cover_image_url\": \"https://example.com/cover.jpg\", \"organizer_name\": \"Fayrly\", \"contact_email\": \"events@fayrly.local\", \"contact_phone\": \"+6281200000000\", \"tags\": [\"charity\", \"music\"], \"beneficiary\": \"Yayasan Harapan\", \"donation_target\": 50000000}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/events",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Butuh event:write. slug opsional (otomatis). type charity wajib beneficiary."
+          }
+        },
+        {
+          "name": "Get Event",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/events/{{event_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Terima UUID atau slug. Tanpa token hanya event published/ongoing/completed yang terlihat; dengan event:read draft juga bisa diambil."
+          }
+        },
+        {
+          "name": "Update Event",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"venue_name\": \"Grand Hall 2\", \"capacity\": 650}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/events/{{event_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Hanya bisa saat draft/published/ongoing."
+          }
+        },
+        {
+          "name": "Publish Event",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"publish 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"status published\", function () { pm.expect(pm.response.json().data.status).to.eql(\"published\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\": \"published\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/events/{{event_id}}/status",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Transisi: draft → published."
+          }
+        },
+        {
+          "name": "Move Event to Ongoing",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\": \"ongoing\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/events/{{event_id}}/status",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Transisi: published → ongoing."
+          }
+        },
+        {
+          "name": "Complete Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\": \"completed\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/events/{{event_id}}/status",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Transisi: ongoing → completed. Setelah completed, event terkunci dari edit."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "List Reports",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/reports?page=1&page_size=20",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Filter: q, type, status, event_id, mine=true, page, page_size."
+          }
+        },
+        {
+          "name": "Create Report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create report 201\", function () { pm.response.to.have.status(201); });",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set(\"report_id\", b.data.id);",
+                  "pm.test(\"report draft\", function () { pm.expect(b.data.status).to.eql(\"draft\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Laporan Keuangan Charity Night {{$timestamp}}\", \"type\": \"financial\", \"event_id\": \"{{event_id}}\", \"event_title\": \"Fayrly Charity Night\", \"period_start\": \"2026-11-01\", \"period_end\": \"2026-11-30\", \"summary\": \"Ringkasan pemasukan dan pengeluaran\", \"metrics\": {\"revenue\": 125000000, \"expenses\": 84000000, \"attendees\": 480}}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/reports",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Butuh report:write."
+          }
+        },
+        {
+          "name": "Get Report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/reports/{{report_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Report",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"summary\": \"Ringkasan diperbarui\", \"metrics\": {\"revenue\": 130000000, \"expenses\": 84000000, \"attendees\": 505}}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/reports/{{report_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Hanya draft/rejected."
+          }
+        },
+        {
+          "name": "Submit Report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"submit 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"status submitted\", function () { pm.expect(pm.response.json().data.status).to.eql(\"submitted\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/api/v1/reports/{{report_id}}/submit",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Tanpa body. Hanya dari draft/rejected."
+          }
+        },
+        {
+          "name": "Review Report (reviewer)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"review 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"status approved\", function () { pm.expect(pm.response.json().data.status).to.eql(\"approved\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"decision\": \"approved\", \"notes\": \"Sesuai bukti transfer\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/reports/{{report_id}}/review",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{reviewer_token}}", "type": "string" }
+              ]
+            },
+            "description": "Pakai token reviewer. decision: approved/rejected; rejected wajib notes."
+          }
+        },
+        {
+          "name": "Create Draft Report (untuk delete)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"create draft 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set(\"report2_id\", pm.response.json().data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"Draft untuk dihapus {{$timestamp}}\", \"type\": \"other\", \"summary\": \"Akan dihapus\", \"metrics\": {\"notes\": 1}}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/v1/reports",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Draft Report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/reports/{{report2_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Hanya report draft/rejected yang bisa dihapus."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "item": [
+        {
+          "name": "Delete Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete member 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users/{{member_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            },
+            "description": "Menghapus akun member yang dibuat di folder Auth."
+          }
+        },
+        {
+          "name": "Delete Reviewer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete reviewer 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users/{{reviewer_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Manager User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete manager 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/users/{{user_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Finance Role",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete role 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/roles/{{role_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Event",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"delete event 204\", function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/events/{{event_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{access_token}}", "type": "string" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/healthz"
+          }
+        },
+        {
+          "name": "Readiness (semua service)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/readyz"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "member_token", "value": "" },
+    { "key": "reviewer_token", "value": "" },
+    { "key": "user_id", "value": "" },
+    { "key": "member_id", "value": "" },
+    { "key": "reviewer_id", "value": "" },
+    { "key": "reviewer_email", "value": "" },
+    { "key": "role_id", "value": "" },
+    { "key": "event_id", "value": "" },
+    { "key": "report_id", "value": "" },
+    { "key": "report2_id", "value": "" }
+  ]
+}
