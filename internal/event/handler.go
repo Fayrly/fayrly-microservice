@@ -12,11 +12,104 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service  *Service
+	payments *Midtrans
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) SetPayments(payments *Midtrans) { h.payments = payments }
+
+func (h *Handler) CreateTicketType(w http.ResponseWriter, r *http.Request) {
+	var req CreateTicketTypeRequest
+	if !httpx.BindValid(w, r, &req) {
+		return
+	}
+	ticket, err := h.service.CreateTicketType(r.Context(), r.PathValue("id"), req)
+	if err != nil {
+		if errors.Is(err, ErrEventNotFound) {
+			httpx.Error(w, r, apierr.NotFound("draft event"))
+			return
+		}
+		if errors.Is(err, ErrTicketTypeExists) {
+			httpx.Error(w, r, apierr.Conflict(err.Error()))
+			return
+		}
+		httpx.Error(w, r, apierr.Internal(err))
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"data": ticket})
+}
+
+func (h *Handler) ListTicketTypes(w http.ResponseWriter, r *http.Request) {
+	principal := authn.FromContext(r.Context())
+	includeInactive := principal != nil && principal.Has("event:write")
+	tickets, err := h.service.ListTicketTypes(r.Context(), r.PathValue("id"), includeInactive)
+	if err != nil {
+		httpx.Error(w, r, apierr.Internal(err))
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"data": tickets})
+}
+
+func (h *Handler) CreateTicketOrder(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		httpx.Error(w, r, apierr.Internal(errors.New("payment gateway is not configured")))
+		return
+	}
+	var req CreateTicketOrderRequest
+	if !httpx.BindValid(w, r, &req) {
+		return
+	}
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" || len(key) > 128 {
+		httpx.Error(w, r, apierr.Validation(map[string]string{"Idempotency-Key": "is required and must be at most 128 characters"}))
+		return
+	}
+	principal := authn.FromContext(r.Context())
+	order, err := h.service.CreateTicketOrder(r.Context(), principal.UserID, key, r.PathValue("id"), req, h.payments)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			httpx.Error(w, r, apierr.NotFound("ticket type"))
+		case errors.Is(err, ErrTicketsUnavailable), errors.Is(err, ErrPaymentInProgress):
+			httpx.Error(w, r, apierr.Conflict(err.Error()))
+		case errors.Is(err, ErrEventCapacityFull):
+			httpx.Error(w, r, apierr.Conflict(err.Error()))
+		case errors.Is(err, ErrUnsupportedCurrency):
+			httpx.Error(w, r, apierr.BadRequest(err.Error()))
+		case errors.Is(err, ErrMidtransUnavailable):
+			httpx.Error(w, r, apierr.New(http.StatusBadGateway, "payment_unavailable", "could not initialize payment"))
+		default:
+			httpx.Error(w, r, apierr.Internal(err))
+		}
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"data": order})
+}
+
+func (h *Handler) GetTicketOrder(w http.ResponseWriter, r *http.Request) {
+	principal := authn.FromContext(r.Context())
+	order, err := h.service.GetTicketOrder(r.Context(), r.PathValue("id"), principal.UserID)
+	if err != nil {
+		httpx.Error(w, r, apierr.NotFound("ticket order"))
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"data": order})
+}
+
+func (h *Handler) PaymentNotification(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		httpx.Error(w, r, apierr.Internal(errors.New("payment gateway is not configured")))
+		return
+	}
+	if err := h.service.ApplyPaymentNotification(r.Context(), h.payments, r.Body); err != nil {
+		httpx.Error(w, r, apierr.BadRequest("invalid payment notification"))
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {

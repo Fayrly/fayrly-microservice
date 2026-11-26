@@ -33,7 +33,7 @@ and owns its database. Only the gateway is exposed to clients.
 | `gateway` | 8080 | – | Public entry point, CORS, per-IP rate limiting, aggregated `/readyz` |
 | `auth` | 8081 | `fayrly_auth` | Credentials, JWT issuing, refresh-token families, Firebase login, bootstrap superadmin |
 | `user` | 8082 | `fayrly_user` | User profiles, roles, permissions, access matrix, auth credential provisioning |
-| `event` | 8083 | `fayrly_event` | Concert / charity / community events and their lifecycle |
+| `event` | 8083 | `fayrly_event` | Concert / charity / community events, ticket inventory and checkout |
 | `report` | 8084 | `fayrly_report` | Reports, metrics, submit/review workflow |
 
 Service-to-service calls use `X-Internal-Key` and are never routed by the gateway.
@@ -114,6 +114,8 @@ All configuration is environment based.
 | `CORS_ALLOWED_ORIGINS` | empty (same-origin only) | gateway |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `20` / `40` (`50`/`100` in compose) | gateway |
 | `FIREBASE_PROJECT_ID` | empty (Firebase login disabled) | auth |
+| `MIDTRANS_SERVER_KEY` / `MIDTRANS_SIGNATURE_SECRET` | empty (checkout disabled) | event |
+| `MIDTRANS_ENVIRONMENT` | `sandbox` (`production` for live payments) | event |
 | `MAIL_MODE` | `auto` (`log` prints emails to the service log) | auth |
 | `RESEND_API_KEY` / `MAIL_FROM` | empty | auth (password reset email) |
 | `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `_NAME` | empty | auth |
@@ -192,6 +194,46 @@ integers in the smallest currency unit, avoiding floating-point drift.
 List filters: `q`, `type`, `city`, `status` (comma-separated), `from`, `to`,
 `page`, `page_size`. User lists accept `q`, `status`, `role`; report lists accept
 `q`, `type`, `status`, `event_id`, `mine=true`.
+
+### Event tickets and checkout
+
+Ticket types hold the authoritative unit price and inventory; event `price_min` and
+`price_max` remain display fields. Create ticket types while an event is a draft:
+
+```http
+POST /api/v1/events/{event_id}/ticket-types
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{"name":"General Admission","price":150000,"capacity":300}
+```
+
+Ticket prices and payment totals are integer IDR. Checkout accepts a ticket type
+and quantity, never a client-supplied amount. Send a unique `Idempotency-Key` for
+each checkout attempt:
+
+```http
+POST /api/v1/events/{event_id}/orders
+Authorization: Bearer <access-token>
+Idempotency-Key: <unique-key>
+Content-Type: application/json
+
+{"ticket_type_id":"<ticket-type-uuid>","quantity":2}
+```
+
+The response includes a `redirect_url` for the Midtrans-hosted payment page.
+Checkout offers GoPay, bank transfer virtual accounts, and QRIS. Midtrans sends
+status updates to `POST /api/v1/events/payment-notifications`; configure that
+public HTTPS URL as the Payment Notification URL in the Midtrans dashboard.
+The webhook signature is checked with `MIDTRANS_SIGNATURE_SECRET` before order
+status or reserved inventory is changed. Keep both Midtrans secrets only in the
+event service environment. Configure both together; checkout is unavailable if
+they are absent.
+
+For local testing, set `MIDTRANS_SERVER_KEY` and `MIDTRANS_SIGNATURE_SECRET` to
+Sandbox credentials and leave `MIDTRANS_ENVIRONMENT=sandbox`. Use
+`MIDTRANS_ENVIRONMENT=production` only with production credentials and a live
+notification URL.
 
 ### Reports (`/api/v1/reports`)
 

@@ -214,8 +214,42 @@ func (r *Repository) Update(ctx context.Context, id string, f updateFields) erro
 	if f.Tags != nil {
 		tags = textArrayLiteral(*f.Tags)
 	}
-	err := r.db.WithContext(ctx).Exec(
-		`UPDATE events SET
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if f.Capacity != nil || f.Currency != nil {
+			var exists string
+			if err := tx.Raw(`SELECT id::text FROM events WHERE id=?::uuid AND deleted_at IS NULL FOR UPDATE`, id).Scan(&exists).Error; err != nil {
+				return err
+			}
+			if exists == "" {
+				return ErrEventNotFound
+			}
+			if f.Currency != nil {
+				var ticketTypes int
+				if err := tx.Raw(`SELECT count(*)::int FROM event_ticket_types WHERE event_id=?::uuid`, id).Scan(&ticketTypes).Error; err != nil {
+					return err
+				}
+				if ticketTypes > 0 {
+					var currentCurrency string
+					if err := tx.Raw(`SELECT btrim(currency) FROM events WHERE id=?::uuid`, id).Scan(&currentCurrency).Error; err != nil {
+						return err
+					}
+					if currentCurrency != *f.Currency {
+						return ErrTicketCurrencyLocked
+					}
+				}
+			}
+			if f.Capacity != nil && *f.Capacity > 0 {
+				var inUse int
+				if err := tx.Raw(`SELECT coalesce(sum(sold+reserved),0)::int FROM event_ticket_types WHERE event_id=?::uuid`, id).Scan(&inUse).Error; err != nil {
+					return err
+				}
+				if *f.Capacity < inUse {
+					return ErrEventCapacityFull
+				}
+			}
+		}
+		return tx.Exec(
+			`UPDATE events SET
 			slug            = COALESCE(?::text, slug),
 			title           = COALESCE(?::text, title),
 			description     = COALESCE(?::text, description),
@@ -241,10 +275,11 @@ func (r *Repository) Update(ctx context.Context, id string, f updateFields) erro
 			updated_by      = ?::uuid,
 			updated_at      = now()
 		 WHERE id = ? AND deleted_at IS NULL`,
-		f.Slug, f.Title, f.Description, f.Type, f.VenueName, f.VenueAddress, f.City, f.Country,
-		f.StartsAt, f.EndsAt, f.Capacity, f.PriceMin, f.PriceMax, f.Currency, f.CoverImageURL,
-		f.OrganizerName, f.ContactEmail, f.ContactPhone, tags, f.Beneficiary, f.DonationTarget,
-		f.DonationRaised, f.UpdatedBy, id).Error
+			f.Slug, f.Title, f.Description, f.Type, f.VenueName, f.VenueAddress, f.City, f.Country,
+			f.StartsAt, f.EndsAt, f.Capacity, f.PriceMin, f.PriceMax, f.Currency, f.CoverImageURL,
+			f.OrganizerName, f.ContactEmail, f.ContactPhone, tags, f.Beneficiary, f.DonationTarget,
+			f.DonationRaised, f.UpdatedBy, id).Error
+	})
 	return mapEventUnique(err)
 }
 
@@ -367,8 +402,13 @@ func mapEventUnique(err error) error {
 		return nil
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" && strings.Contains(pgErr.ConstraintName, "slug") {
-		return ErrSlugTaken
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if strings.Contains(pgErr.ConstraintName, "slug") {
+			return ErrSlugTaken
+		}
+		if pgErr.ConstraintName == "event_ticket_types_event_id_name_key" {
+			return ErrTicketTypeExists
+		}
 	}
 	return err
 }

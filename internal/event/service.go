@@ -429,6 +429,10 @@ func mapEventError(err error) error {
 		return apierr.Conflict(err.Error())
 	case errors.Is(err, ErrEventLocked):
 		return apierr.Conflict(err.Error())
+	case errors.Is(err, ErrEventCapacityFull):
+		return apierr.Conflict(err.Error())
+	case errors.Is(err, ErrTicketCurrencyLocked):
+		return apierr.Conflict(err.Error())
 	case errors.Is(err, ErrReviewNotFound):
 		return apierr.NotFound("review")
 	case errors.Is(err, ErrReviewAlreadyMade):

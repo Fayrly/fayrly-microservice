@@ -105,6 +105,9 @@ services:
       <<: *service-env
       EVENT_ADDR: ":8083"
       EVENT_DATABASE_URL: postgres://fayrly:${STAGING_POSTGRES_PASSWORD:?Set STAGING_POSTGRES_PASSWORD}@postgres:5432/fayrly_event?sslmode=disable
+      MIDTRANS_SERVER_KEY: ${STAGING_MIDTRANS_SERVER_KEY:-}
+      MIDTRANS_SIGNATURE_SECRET: ${STAGING_MIDTRANS_SIGNATURE_SECRET:-}
+      MIDTRANS_ENVIRONMENT: ${STAGING_MIDTRANS_ENVIRONMENT:-sandbox}
     depends_on:
       postgres:
         condition: service_healthy

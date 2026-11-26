@@ -27,6 +27,11 @@ func NewRouter(handler *Handler, tokens *authn.Manager, ping func(ctx context.Co
 	}
 
 	mux.Handle("GET /api/v1/events", optional(handler.List))
+	mux.Handle("GET /api/v1/events/{id}/ticket-types", optional(handler.ListTicketTypes))
+	mux.Handle("POST /api/v1/events/{id}/ticket-types", authenticated([]string{"event:write"}, handler.CreateTicketType))
+	mux.Handle("POST /api/v1/events/{id}/orders", authenticatedOnly(handler.CreateTicketOrder))
+	mux.Handle("GET /api/v1/events/orders/{id}", authenticatedOnly(handler.GetTicketOrder))
+	mux.HandleFunc("POST /api/v1/events/payment-notifications", handler.PaymentNotification)
 	mux.Handle("GET /api/v1/events/mine", authenticatedOnly(handler.ListMine))
 	mux.Handle("GET /api/v1/events/reviews", optional(handler.ListReviews))
 	mux.Handle("POST /api/v1/events/reviews/{id}/helpful", optional(handler.MarkReviewHelpful))
