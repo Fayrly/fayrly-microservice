@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -51,40 +52,47 @@ type CreateTicketTypeRequest struct {
 }
 
 type CreateTicketOrderRequest struct {
-	TicketTypeID string `json:"ticket_type_id" validate:"required,uuid"`
-	Quantity     int    `json:"quantity" validate:"required,gte=1,lte=10"`
+	TicketTypeID  string `json:"ticket_type_id" validate:"required,uuid"`
+	Quantity      int    `json:"quantity" validate:"required,gte=1,lte=10"`
+	PaymentMethod string `json:"payment_method" validate:"omitempty,oneof=bca_va bni_va bri_va permata_va qris gopay"`
 }
 
 type TicketOrder struct {
-	ID           string    `json:"id"`
-	EventID      string    `json:"event_id"`
-	TicketTypeID string    `json:"ticket_type_id"`
-	UserID       string    `json:"user_id,omitempty"`
-	EventTitle   string    `json:"event_title"`
-	TicketName   string    `json:"ticket_name"`
-	Quantity     int       `json:"quantity"`
-	UnitPrice    int64     `json:"unit_price"`
-	GrossAmount  int64     `json:"gross_amount"`
-	Currency     string    `json:"currency"`
-	Status       string    `json:"status"`
-	PaymentType  string    `json:"payment_type,omitempty"`
-	RedirectURL  string    `json:"redirect_url,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string     `json:"id"`
+	EventID       string     `json:"event_id"`
+	TicketTypeID  string     `json:"ticket_type_id"`
+	UserID        string     `json:"user_id,omitempty"`
+	EventTitle    string     `json:"event_title"`
+	TicketName    string     `json:"ticket_name"`
+	Quantity      int        `json:"quantity"`
+	UnitPrice     int64      `json:"unit_price"`
+	GrossAmount   int64      `json:"gross_amount"`
+	Currency      string     `json:"currency"`
+	Status        string     `json:"status"`
+	PaymentMethod string     `json:"payment_method,omitempty"`
+	PaymentType   string     `json:"payment_type,omitempty"`
+	VANumber      string     `json:"va_number,omitempty"`
+	QRURL         string     `json:"qr_url,omitempty"`
+	DeeplinkURL   string     `json:"deeplink_url,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	SnapToken     string     `json:"snap_token,omitempty"`
+	RedirectURL   string     `json:"redirect_url,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type MidtransConfig struct {
-	ServerKey       string
-	SignatureSecret string
-	BaseURL         string
-	Client          *http.Client
+	ServerKey   string
+	BaseURL     string
+	CoreBaseURL string
+	Client      *http.Client
 }
 
 type Midtrans struct {
-	serverKey       string
-	signatureSecret string
-	baseURL         string
-	client          *http.Client
+	serverKey   string
+	baseURL     string
+	coreBaseURL string
+	client      *http.Client
 }
 
 func NewMidtrans(cfg MidtransConfig) *Midtrans {
@@ -96,7 +104,11 @@ func NewMidtrans(cfg MidtransConfig) *Midtrans {
 	if base == "" {
 		base = "https://app.sandbox.midtrans.com"
 	}
-	return &Midtrans{serverKey: cfg.ServerKey, signatureSecret: cfg.SignatureSecret, baseURL: base, client: client}
+	core := strings.TrimRight(cfg.CoreBaseURL, "/")
+	if core == "" {
+		core = strings.Replace(base, "app.", "api.", 1)
+	}
+	return &Midtrans{serverKey: cfg.ServerKey, baseURL: base, coreBaseURL: core, client: client}
 }
 
 type snapRequest struct {
@@ -119,11 +131,20 @@ type snapResponse struct {
 	RedirectURL string `json:"redirect_url"`
 }
 
+func snapItemName(name string) string {
+	const limit = 50
+	runes := []rune(strings.TrimSpace(name))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit])
+}
+
 func (m *Midtrans) CreateSnap(ctx context.Context, order *TicketOrder) (snapResponse, error) {
 	var payload snapRequest
 	payload.TransactionDetails.OrderID = order.ID
 	payload.TransactionDetails.GrossAmount = order.GrossAmount
-	payload.ItemDetails = []snapItem{{ID: order.TicketTypeID, Price: order.UnitPrice, Quantity: order.Quantity, Name: order.TicketName}}
+	payload.ItemDetails = []snapItem{{ID: order.TicketTypeID, Price: order.UnitPrice, Quantity: order.Quantity, Name: snapItemName(order.TicketName)}}
 	payload.EnabledPayments = []string{"gopay", "bank_transfer", "other_qris"}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -158,6 +179,215 @@ func (m *Midtrans) CreateSnap(ctx context.Context, order *TicketOrder) (snapResp
 	return result, nil
 }
 
+// PaymentInstructions is the data needed to render a Fayrly-owned checkout page.
+type PaymentInstructions struct {
+	TransactionID string
+	PaymentType   string
+	Bank          string
+	VANumber      string
+	QRURL         string
+	DeeplinkURL   string
+	ExpiresAt     *time.Time
+}
+
+type coreBankTransfer struct {
+	Bank string `json:"bank"`
+}
+
+type coreQRIS struct {
+	Acquirer string `json:"acquirer"`
+}
+
+type coreChargeRequest struct {
+	PaymentType        string `json:"payment_type"`
+	TransactionDetails struct {
+		OrderID     string `json:"order_id"`
+		GrossAmount int64  `json:"gross_amount"`
+	} `json:"transaction_details"`
+	ItemDetails  []snapItem        `json:"item_details"`
+	BankTransfer *coreBankTransfer `json:"bank_transfer,omitempty"`
+	QRIS         *coreQRIS         `json:"qris,omitempty"`
+}
+
+type coreAction struct {
+	Name   string `json:"name"`
+	Method string `json:"method"`
+	URL    string `json:"url"`
+}
+
+type coreChargeResponse struct {
+	StatusCode        string `json:"status_code"`
+	StatusMessage     string `json:"status_message"`
+	TransactionID     string `json:"transaction_id"`
+	TransactionStatus string `json:"transaction_status"`
+	FraudStatus       string `json:"fraud_status"`
+	PaymentType       string `json:"payment_type"`
+	GrossAmount       string `json:"gross_amount"`
+	ExpiryTime        string `json:"expiry_time"`
+	VANumbers         []struct {
+		Bank     string `json:"bank"`
+		VANumber string `json:"va_number"`
+	} `json:"va_numbers"`
+	PermataVANumber string       `json:"permata_va_number"`
+	Actions         []coreAction `json:"actions"`
+}
+
+var coreBanks = map[string]string{
+	"bca_va":     "bca",
+	"bni_va":     "bni",
+	"bri_va":     "bri",
+	"permata_va": "permata",
+}
+
+func parseMidtransExpiry(value string) *time.Time {
+	if value == "" {
+		return nil
+	}
+	jakarta, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		jakarta = time.FixedZone("WIB", 7*60*60)
+	}
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, jakarta)
+	if err != nil {
+		return nil
+	}
+	utc := parsed.UTC()
+	return &utc
+}
+
+// CreateCharge asks the Midtrans Core API for a payment instruction in the
+// requested method, so the payment UI can stay inside Fayrly.
+func (m *Midtrans) CreateCharge(ctx context.Context, order *TicketOrder, method string) (PaymentInstructions, error) {
+	var payload coreChargeRequest
+	payload.TransactionDetails.OrderID = order.ID
+	payload.TransactionDetails.GrossAmount = order.GrossAmount
+	payload.ItemDetails = []snapItem{{ID: order.TicketTypeID, Price: order.UnitPrice, Quantity: order.Quantity, Name: snapItemName(order.TicketName)}}
+	switch method {
+	case "qris":
+		payload.PaymentType = "qris"
+		payload.QRIS = &coreQRIS{Acquirer: "gopay"}
+	case "gopay":
+		payload.PaymentType = "gopay"
+	default:
+		bank, ok := coreBanks[method]
+		if !ok {
+			return PaymentInstructions{}, fmt.Errorf("unsupported payment method %q", method)
+		}
+		payload.PaymentType = "bank_transfer"
+		payload.BankTransfer = &coreBankTransfer{Bank: bank}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return PaymentInstructions{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.coreBaseURL+"/v2/charge", strings.NewReader(string(body)))
+	if err != nil {
+		return PaymentInstructions{}, err
+	}
+	req.SetBasicAuth(m.serverKey, "")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return PaymentInstructions{}, fmt.Errorf("call Midtrans Core API: %w", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return PaymentInstructions{}, err
+	}
+	var result coreChargeResponse
+	_ = json.Unmarshal(responseBody, &result)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !strings.HasPrefix(result.StatusCode, "2") {
+		if result.StatusMessage != "" {
+			return PaymentInstructions{}, fmt.Errorf("Midtrans charge rejected: %s", result.StatusMessage)
+		}
+		return PaymentInstructions{}, fmt.Errorf("Midtrans charge returned HTTP %d", resp.StatusCode)
+	}
+	instructions := PaymentInstructions{
+		TransactionID: result.TransactionID,
+		PaymentType:   result.PaymentType,
+		ExpiresAt:     parseMidtransExpiry(result.ExpiryTime),
+	}
+	for _, action := range result.Actions {
+		switch action.Name {
+		case "generate-qr-code":
+			instructions.QRURL = action.URL
+		case "deeplink-redirect":
+			instructions.DeeplinkURL = action.URL
+		}
+	}
+	if len(result.VANumbers) > 0 {
+		instructions.Bank = result.VANumbers[0].Bank
+		instructions.VANumber = result.VANumbers[0].VANumber
+	} else if result.PermataVANumber != "" {
+		instructions.Bank = "permata"
+		instructions.VANumber = result.PermataVANumber
+	}
+	if instructions.PaymentType == "" {
+		instructions.PaymentType = payload.PaymentType
+	}
+	if payload.PaymentType == "bank_transfer" && instructions.VANumber == "" {
+		return PaymentInstructions{}, errors.New("Midtrans charge response omitted the virtual account number")
+	}
+	if payload.PaymentType == "qris" && instructions.QRURL == "" {
+		return PaymentInstructions{}, errors.New("Midtrans charge response omitted the QR code")
+	}
+	return instructions, nil
+}
+
+type coreStatusResponse struct {
+	StatusCode        string `json:"status_code"`
+	StatusMessage     string `json:"status_message"`
+	TransactionID     string `json:"transaction_id"`
+	TransactionStatus string `json:"transaction_status"`
+	FraudStatus       string `json:"fraud_status"`
+	PaymentType       string `json:"payment_type"`
+	GrossAmount       string `json:"gross_amount"`
+}
+
+// FetchStatus reads the authoritative transaction state from the Core API so
+// the checkout page can update without waiting for a webhook.
+func (m *Midtrans) FetchStatus(ctx context.Context, orderID string) (midtransNotification, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.coreBaseURL+"/v2/"+url.PathEscape(orderID)+"/status", nil)
+	if err != nil {
+		return midtransNotification{}, err
+	}
+	req.SetBasicAuth(m.serverKey, "")
+	req.Header.Set("Accept", "application/json")
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return midtransNotification{}, fmt.Errorf("call Midtrans status API: %w", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return midtransNotification{}, err
+	}
+	var result coreStatusResponse
+	_ = json.Unmarshal(responseBody, &result)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || result.TransactionStatus == "" {
+		if result.StatusMessage != "" {
+			return midtransNotification{}, fmt.Errorf("Midtrans status check failed: %s", result.StatusMessage)
+		}
+		return midtransNotification{}, fmt.Errorf("Midtrans status check returned HTTP %d", resp.StatusCode)
+	}
+	statusCode := result.StatusCode
+	if (result.TransactionStatus == "settlement" || result.TransactionStatus == "capture") &&
+		(result.FraudStatus == "" || strings.EqualFold(result.FraudStatus, "accept")) {
+		statusCode = "200"
+	}
+	return midtransNotification{
+		OrderID:           orderID,
+		StatusCode:        statusCode,
+		GrossAmount:       result.GrossAmount,
+		TransactionID:     result.TransactionID,
+		TransactionStatus: result.TransactionStatus,
+		PaymentType:       result.PaymentType,
+		FraudStatus:       result.FraudStatus,
+	}, nil
+}
+
 type midtransNotification struct {
 	OrderID           string `json:"order_id"`
 	StatusCode        string `json:"status_code"`
@@ -170,10 +400,11 @@ type midtransNotification struct {
 }
 
 func (m *Midtrans) VerifyNotification(n midtransNotification) bool {
-	if m.signatureSecret == "" || n.OrderID == "" || n.StatusCode == "" || n.GrossAmount == "" || n.SignatureKey == "" {
+	if m.serverKey == "" || n.OrderID == "" || n.StatusCode == "" || n.GrossAmount == "" || n.SignatureKey == "" {
 		return false
 	}
-	sum := sha512.Sum512([]byte(n.OrderID + n.StatusCode + n.GrossAmount + m.signatureSecret))
+	// Midtrans signs notifications with the server key, not a separate secret.
+	sum := sha512.Sum512([]byte(n.OrderID + n.StatusCode + n.GrossAmount + m.serverKey))
 	expected := sum[:]
 	got, err := hex.DecodeString(n.SignatureKey)
 	return err == nil && len(got) == len(expected) && subtle.ConstantTimeCompare(got, expected) == 1
@@ -247,16 +478,26 @@ func (r *Repository) CreateTicketOrder(ctx context.Context, userID, requestKey, 
 		}
 		var prior TicketOrder
 		if err := tx.Raw(`SELECT id::text AS id,event_id::text AS event_id,ticket_type_id::text AS ticket_type_id,user_id::text AS user_id,
-			event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,status,redirect_url,created_at,updated_at
+			event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,status,payment_method,payment_type,
+			va_number,qr_url,deeplink_url,expires_at,snap_token,redirect_url,created_at,updated_at
 			FROM event_ticket_orders WHERE user_id=?::uuid AND request_key=? FOR UPDATE`, userID, requestKey).Scan(&prior).Error; err != nil {
 			return err
 		}
+		resume := false
 		if prior.ID != "" {
-			if prior.RedirectURL == "" {
+			switch {
+			case prior.Status == "pending" && (prior.RedirectURL != "" || prior.PaymentMethod != ""):
+				order = prior
+				return nil
+			case prior.Status == "pending":
 				return ErrPaymentInProgress
+			case prior.Status == "failed" && prior.RedirectURL == "":
+				// No Snap session or payment instruction exists yet, so the same idempotency key can retry safely.
+				resume = true
+			default:
+				order = prior
+				return nil
 			}
-			order = prior
-			return nil
 		}
 		id := uuid.NewString()
 		result := tx.Exec(`UPDATE event_ticket_types SET reserved=reserved+?,updated_at=now()
@@ -280,10 +521,29 @@ func (r *Repository) CreateTicketOrder(ctx context.Context, userID, requestKey, 
 		if amount/int64(quantity) != ticket.Price || amount > 999999999999 {
 			return errors.New("ticket total is outside Midtrans amount limits")
 		}
+		if resume {
+			result := tx.Exec(`UPDATE event_ticket_orders SET status='pending',midtrans_transaction_id='',payment_type='',
+				snap_token='',redirect_url='',payment_method='',va_number='',qr_url='',deeplink_url='',expires_at=NULL,
+				ticket_type_id=?::uuid,event_title=?,ticket_name=?,quantity=?,unit_price=?,
+				gross_amount=?,updated_at=now()
+				WHERE id=?::uuid AND status='failed' AND redirect_url=''`,
+				ticketTypeID, ticket.EventTitle, ticket.Name, quantity, ticket.Price, amount, prior.ID)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrPaymentInProgress
+			}
+			return tx.Raw(`SELECT id::text AS id,event_id::text AS event_id,ticket_type_id::text AS ticket_type_id,
+				user_id::text AS user_id,event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,
+				status,payment_method,payment_type,va_number,qr_url,deeplink_url,expires_at,snap_token,created_at,updated_at
+				FROM event_ticket_orders WHERE id=?::uuid`, prior.ID).Scan(&order).Error
+		}
 		if err := tx.Raw(`INSERT INTO event_ticket_orders (id,request_key,event_id,ticket_type_id,user_id,event_title,ticket_name,quantity,unit_price,gross_amount,currency)
 			VALUES (?::uuid,?,?,?::uuid,?::uuid,?,?,?,?,?,?)
 			RETURNING id::text AS id,event_id::text AS event_id,ticket_type_id::text AS ticket_type_id,user_id::text AS user_id,
-			event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,status,created_at,updated_at`,
+			event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,status,payment_method,payment_type,
+			va_number,qr_url,deeplink_url,expires_at,snap_token,created_at,updated_at`,
 			id, requestKey, ticket.EventID, ticketTypeID, userID, ticket.EventTitle, ticket.Name, quantity, ticket.Price, amount, ticket.Currency).Scan(&order).Error; err != nil {
 			return err
 		}
@@ -313,11 +573,13 @@ func (r *Repository) FailOrder(ctx context.Context, orderID string) error {
 	})
 }
 
-func (r *Repository) GetTicketOrder(ctx context.Context, id, userID string) (*TicketOrder, error) {
+func (r *Repository) GetTicketOrder(ctx context.Context, eventID, id, userID string) (*TicketOrder, error) {
 	var row TicketOrder
 	err := r.db.WithContext(ctx).Raw(`SELECT id::text AS id,event_id::text AS event_id,ticket_type_id::text AS ticket_type_id,
 		user_id::text AS user_id,event_title,ticket_name,quantity,unit_price,gross_amount,btrim(currency) AS currency,
-		status,payment_type,redirect_url,created_at,updated_at FROM event_ticket_orders WHERE id=?::uuid AND user_id=?::uuid`, id, userID).Scan(&row).Error
+		status,payment_method,payment_type,va_number,qr_url,deeplink_url,expires_at,snap_token,redirect_url,created_at,updated_at
+		FROM event_ticket_orders
+		WHERE id=?::uuid AND event_id=?::uuid AND user_id=?::uuid`, id, eventID, userID).Scan(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -325,6 +587,14 @@ func (r *Repository) GetTicketOrder(ctx context.Context, id, userID string) (*Ti
 		return nil, ErrOrderNotFound
 	}
 	return &row, nil
+}
+
+func (r *Repository) SavePaymentInstructions(ctx context.Context, orderID, method string, instructions PaymentInstructions) error {
+	return r.db.WithContext(ctx).Exec(`UPDATE event_ticket_orders SET payment_method=?,midtrans_transaction_id=?,payment_type=?,
+		va_number=?,qr_url=?,deeplink_url=?,expires_at=?,updated_at=now()
+		WHERE id=?::uuid AND status='pending'`,
+		method, instructions.TransactionID, instructions.PaymentType, instructions.VANumber,
+		instructions.QRURL, instructions.DeeplinkURL, instructions.ExpiresAt, orderID).Error
 }
 
 func (r *Repository) ApplyNotification(ctx context.Context, n midtransNotification) error {
@@ -389,6 +659,21 @@ func (s *Service) CreateTicketOrder(ctx context.Context, principalUserID, reques
 	if err != nil {
 		return nil, err
 	}
+	if req.PaymentMethod != "" {
+		if order.PaymentMethod != "" {
+			return order, nil
+		}
+		instructions, err := gateway.CreateCharge(ctx, order, req.PaymentMethod)
+		if err != nil {
+			_ = s.repo.FailOrder(ctx, order.ID)
+			return nil, fmt.Errorf("%w: %v", ErrMidtransUnavailable, err)
+		}
+		if err := s.repo.SavePaymentInstructions(ctx, order.ID, req.PaymentMethod, instructions); err != nil {
+			_ = s.repo.FailOrder(ctx, order.ID)
+			return nil, err
+		}
+		return s.repo.GetTicketOrder(ctx, eventID, order.ID, principalUserID)
+	}
 	if order.RedirectURL != "" {
 		return order, nil
 	}
@@ -398,14 +683,37 @@ func (s *Service) CreateTicketOrder(ctx context.Context, principalUserID, reques
 		return nil, fmt.Errorf("%w: %v", ErrMidtransUnavailable, err)
 	}
 	if err := s.repo.SaveSnap(ctx, order.ID, snap); err != nil {
+		_ = s.repo.FailOrder(ctx, order.ID)
 		return nil, err
 	}
+	order.SnapToken = snap.Token
 	order.RedirectURL = snap.RedirectURL
 	return order, nil
 }
 
-func (s *Service) GetTicketOrder(ctx context.Context, id, userID string) (*TicketOrder, error) {
-	return s.repo.GetTicketOrder(ctx, id, userID)
+func (s *Service) GetTicketOrder(ctx context.Context, eventID, id, userID string) (*TicketOrder, error) {
+	return s.repo.GetTicketOrder(ctx, eventID, id, userID)
+}
+
+// SyncTicketOrder refreshes a pending order from the Midtrans Core API, which
+// keeps the Fayrly checkout page current even without a reachable webhook.
+func (s *Service) SyncTicketOrder(ctx context.Context, gateway *Midtrans, eventID, orderID, userID string) (*TicketOrder, error) {
+	order, err := s.repo.GetTicketOrder(ctx, eventID, orderID, userID)
+	if err != nil {
+		return nil, err
+	}
+	switch order.Status {
+	case "paid", "expired", "failed", "cancelled":
+		return order, nil
+	}
+	notification, err := gateway.FetchStatus(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMidtransUnavailable, err)
+	}
+	if err := s.repo.ApplyNotification(ctx, notification); err != nil {
+		return nil, err
+	}
+	return s.repo.GetTicketOrder(ctx, eventID, orderID, userID)
 }
 
 func (s *Service) ApplyPaymentNotification(ctx context.Context, gateway *Midtrans, body io.Reader) error {
