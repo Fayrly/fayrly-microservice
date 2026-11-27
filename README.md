@@ -114,7 +114,7 @@ All configuration is environment based.
 | `CORS_ALLOWED_ORIGINS` | empty (same-origin only) | gateway |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `20` / `40` (`50`/`100` in compose) | gateway |
 | `FIREBASE_PROJECT_ID` | empty (Firebase login disabled) | auth |
-| `MIDTRANS_SERVER_KEY` / `MIDTRANS_SIGNATURE_SECRET` | empty (checkout disabled) | event |
+| `MIDTRANS_SERVER_KEY` | empty (checkout disabled) | event |
 | `MIDTRANS_ENVIRONMENT` | `sandbox` (`production` for live payments) | event |
 | `MAIL_MODE` | `auto` (`log` prints emails to the service log) | auth |
 | `RESEND_API_KEY` / `MAIL_FROM` | empty | auth (password reset email) |
@@ -218,22 +218,33 @@ Authorization: Bearer <access-token>
 Idempotency-Key: <unique-key>
 Content-Type: application/json
 
-{"ticket_type_id":"<ticket-type-uuid>","quantity":2}
+{"ticket_type_id":"<ticket-type-uuid>","quantity":2,"payment_method":"bca_va"}
 ```
 
-The response includes a `redirect_url` for the Midtrans-hosted payment page.
-Checkout offers GoPay, bank transfer virtual accounts, and QRIS. Midtrans sends
-status updates to `POST /api/v1/events/payment-notifications`; configure that
-public HTTPS URL as the Payment Notification URL in the Midtrans dashboard.
-The webhook signature is checked with `MIDTRANS_SIGNATURE_SECRET` before order
-status or reserved inventory is changed. Keep both Midtrans secrets only in the
-event service environment. Configure both together; checkout is unavailable if
-they are absent.
+`payment_method` is optional and accepts `bca_va`, `bni_va`, `bri_va`,
+`permata_va`, `qris` or `gopay`. With a method, the event service charges the
+Midtrans Core API (`/v2/charge`) and returns instructions the client renders
+itself: `va_number` for virtual accounts, `qr_url` for QRIS/GoPay, `deeplink_url`
+for GoPay, plus `expires_at`. This keeps the payment page on the Fayrly domain.
+Without a method, the response includes `snap_token` and `redirect_url` for the
+Midtrans-hosted Snap page instead.
 
-For local testing, set `MIDTRANS_SERVER_KEY` and `MIDTRANS_SIGNATURE_SECRET` to
-Sandbox credentials and leave `MIDTRANS_ENVIRONMENT=sandbox`. Use
-`MIDTRANS_ENVIRONMENT=production` only with production credentials and a live
-notification URL.
+Fetch one order with `GET /api/v1/events/{event_id}/orders/{order_id}`. While an
+order is pending, `POST /api/v1/events/{event_id}/orders/{order_id}/sync` polls
+Midtrans for the authoritative transaction state and applies the same status
+transitions as the webhook; it returns the refreshed order.
+
+Midtrans sends status updates to `POST /api/v1/events/payment-notifications`;
+configure that public HTTPS URL as the Payment Notification URL in the Midtrans
+dashboard. The webhook `signature_key` is verified as
+`SHA512(order_id + status_code + gross_amount + server_key)` before order status
+or reserved inventory is changed. Keep `MIDTRANS_SERVER_KEY` only in the event
+service environment; checkout is unavailable when it is absent. Core API charges
+require Core API access to be enabled for the Midtrans account.
+
+For local testing, set `MIDTRANS_SERVER_KEY` to the Sandbox server key and leave
+`MIDTRANS_ENVIRONMENT=sandbox`. Use `MIDTRANS_ENVIRONMENT=production` only with
+production credentials and a live notification URL.
 
 ### Reports (`/api/v1/reports`)
 
