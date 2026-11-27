@@ -92,9 +92,30 @@ func (h *Handler) CreateTicketOrder(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetTicketOrder(w http.ResponseWriter, r *http.Request) {
 	principal := authn.FromContext(r.Context())
-	order, err := h.service.GetTicketOrder(r.Context(), r.PathValue("id"), principal.UserID)
+	order, err := h.service.GetTicketOrder(r.Context(), r.PathValue("id"), r.PathValue("order_id"), principal.UserID)
 	if err != nil {
 		httpx.Error(w, r, apierr.NotFound("ticket order"))
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"data": order})
+}
+
+func (h *Handler) SyncTicketOrder(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		httpx.Error(w, r, apierr.Internal(errors.New("payment gateway is not configured")))
+		return
+	}
+	principal := authn.FromContext(r.Context())
+	order, err := h.service.SyncTicketOrder(r.Context(), h.payments, r.PathValue("id"), r.PathValue("order_id"), principal.UserID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrOrderNotFound):
+			httpx.Error(w, r, apierr.NotFound("ticket order"))
+		case errors.Is(err, ErrMidtransUnavailable):
+			httpx.Error(w, r, apierr.New(http.StatusBadGateway, "payment_unavailable", "could not refresh the payment status"))
+		default:
+			httpx.Error(w, r, apierr.Internal(err))
+		}
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"data": order})
