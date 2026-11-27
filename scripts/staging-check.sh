@@ -36,9 +36,6 @@ if [[ -z "${STAGING_FIREBASE_PROJECT_ID:-}" ]]; then
   printf '%s\n' 'Catatan: login Firebase belum diaktifkan.'
 fi
 
-if [[ -n "${STAGING_MIDTRANS_SERVER_KEY:-}" || -n "${STAGING_MIDTRANS_SIGNATURE_SECRET:-}" ]]; then
-  [[ -n "${STAGING_MIDTRANS_SERVER_KEY:-}" && -n "${STAGING_MIDTRANS_SIGNATURE_SECRET:-}" ]] || fail 'Isi STAGING_MIDTRANS_SERVER_KEY dan STAGING_MIDTRANS_SIGNATURE_SECRET bersama-sama.'
-fi
 environment="${STAGING_MIDTRANS_ENVIRONMENT:-sandbox}"
 [[ "$environment" == sandbox || "$environment" == production ]] || fail 'STAGING_MIDTRANS_ENVIRONMENT harus sandbox atau production.'
 
