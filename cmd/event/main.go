@@ -62,21 +62,19 @@ func run(logger *slog.Logger) error {
 	service := event.NewService(repo)
 	handler := event.NewHandler(service)
 	serverKey := config.String("MIDTRANS_SERVER_KEY", "")
-	signatureSecret := config.String("MIDTRANS_SIGNATURE_SECRET", "")
-	if serverKey != "" || signatureSecret != "" {
-		if serverKey == "" || signatureSecret == "" {
-			return fmt.Errorf("MIDTRANS_SERVER_KEY and MIDTRANS_SIGNATURE_SECRET must be configured together")
-		}
+	if serverKey != "" {
 		baseURL := "https://app.sandbox.midtrans.com"
+		coreBaseURL := "https://api.sandbox.midtrans.com"
 		switch config.String("MIDTRANS_ENVIRONMENT", "sandbox") {
 		case "sandbox":
 		case "production":
 			baseURL = "https://app.midtrans.com"
+			coreBaseURL = "https://api.midtrans.com"
 		default:
 			return fmt.Errorf("MIDTRANS_ENVIRONMENT must be sandbox or production")
 		}
 		handler.SetPayments(event.NewMidtrans(event.MidtransConfig{
-			ServerKey: serverKey, SignatureSecret: signatureSecret, BaseURL: baseURL,
+			ServerKey: serverKey, BaseURL: baseURL, CoreBaseURL: coreBaseURL,
 		}))
 	}
 	router := event.NewRouter(handler, tokens, func(ctx context.Context) error { return database.Ping(ctx, db) })
